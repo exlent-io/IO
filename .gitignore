@@ -52,3 +52,6 @@ env.yml
 .idea
 
 dist
+
+# google cert
+cret.json

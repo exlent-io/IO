@@ -7,11 +7,9 @@ AWS.config.update({
 });
 
 
-const bucketName = 'exlent-pipeline';
 const router = {};
 
 const axios = require('axios').default;
-const uuidv4 = require('uuid/v4');
 
 async function getSession(body) {
 
@@ -60,7 +58,6 @@ async function doHandle(event) {
     if (auth.status != 200) {
         return { statusCode: 401, body: '' };
     }
-    // ddb = new AWS.DynamoDB.DocumentClient();
 
     bd.auth = auth.data;
     try {
@@ -71,22 +68,45 @@ async function doHandle(event) {
     }
 }
 
-router['/'] = async function (event) {
-    if (event.data == null || event.flowid == null) {
+
+const { google } = require('googleapis');
+let jwt = null;
+
+async function initGoogle() {
+    if (jwt !== null) {
+        return;
+    }
+    const key = require('./cret.json');
+    const scopes = 'https://www.googleapis.com/auth/drive.readonly';
+    const j = new google.auth.JWT(key.client_email, null, key.private_key, scopes);
+    await j.authorize();
+    jwt = j;
+    google.options({
+        auth: j
+    });    
+}
+
+async function checkDescription(fileId, gid) {
+    const drive = google.drive('v3');
+    const it = await drive.files.get({fileId: fileId, fields: 'description'});
+    const for_exlent = JSON.parse(it.data.description).for_exlent || [];
+    return for_exlent.reduce((a, b) => a || b === gid , false);
+}
+    
+router['/read-sheet'] = async function (event) {
+    if (event.spreadsheet == null || event.worksheet == null) {
         return { statusCode: 400, body: 'missing key' };
     }
+    await initGoogle();
+    const validDescription = await checkDescription(event.spreadsheet, event.auth.gid);
+    if (!validDescription) {
+        return { statusCode: 401, body: 'missing description shared to the group' };
+    }
+    
+    const sheet = await google.sheets('v4').spreadsheets.values.get({ spreadsheetId: event.spreadsheet, range: event.worksheet });
 
-    const jobid = uuidv4().replace(/-/g, '');
     try {
-        const objectParams = { 
-            Bucket: bucketName,
-            Key: `${event.auth.gid}/${event.flowid}/${jobid}`,
-            Body: JSON.stringify({ data: event.data, who: event.auth }),
-            Metadata: { 'status': 'new' }
-        };
-        // Create object upload promise
-        await new AWS.S3({ apiVersion: '2006-03-01' }).putObject(objectParams).promise();
-        return { statusCode: 200, body: JSON.stringify({ 'jobid': jobid }) };
+        return { statusCode: 200, body: JSON.stringify({ 'values': sheet.data.values }) };
     } catch (error) {
         return { statusCode: 500, body: `write s3 err: ${error.stack}` };
     }
